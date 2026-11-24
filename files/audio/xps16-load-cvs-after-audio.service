@@ -1,0 +1,13 @@
+# popos2604-xps16-audio-camera
+[Unit]
+Description=Load intel_cvs after XPS 16 speaker amps (shared GPIO workaround)
+After=systemd-modules-load.service systemd-udevd.service
+Before=display-manager.service graphical.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/xps16-load-cvs-after-audio
+
+[Install]
+WantedBy=multi-user.target

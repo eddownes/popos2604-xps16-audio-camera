@@ -1,0 +1,16 @@
+#!/bin/sh
+# popos2604-xps16-audio-camera
+# intel_cvs permanently claims GPIO 20 ("wake"), which is also the speaker-ID
+# pin the four CS35L56/57 amps read when they probe. If intel_cvs wins, every
+# amp fails with -EBUSY and no sound card is created. Wait (max 30 s) for the
+# amps to bind, then load intel_cvs so the camera still comes up.
+i=0
+n=0
+while [ $i -lt 60 ]; do
+  n=$(ls -d /sys/bus/soundwire/drivers/cs35l56/sdw:* 2>/dev/null | wc -l)
+  [ "$n" -ge 4 ] && break
+  sleep 0.5
+  i=$((i+1))
+done
+echo "cs35l56 amps bound: $n (waited $((i/2)) s); loading intel_cvs"
+exec /usr/sbin/modprobe intel_cvs
