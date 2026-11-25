@@ -58,6 +58,19 @@ else
   ok "no libcamera crashes this boot"
 fi
 
+echo "Camera — Zoom (V4L2-only apps)"
+if [[ -e /dev/video42 ]] && [[ "$(cat /sys/class/video4linux/video42/name 2>/dev/null)" == "Zoom Camera" ]]; then
+  ok "virtual camera /dev/video42 \"Zoom Camera\" present"
+  if systemctl --user is-active --quiet xps16-camera-relay.service; then
+    ok "camera relay service running"
+  else
+    bad "camera relay service not running (systemctl --user status xps16-camera-relay)"
+  fi
+  grep -q 'Zoom Camera' <<<"$WP" && bad "Zoom Camera is visible in PipeWire (it would loop back)" || ok "Zoom Camera hidden from PipeWire"
+else
+  inf "zoom component not installed"
+fi
+
 if [[ "${1:-}" == "--capture" ]]; then
   echo "Capture test"
   if command -v cam >/dev/null; then
@@ -69,6 +82,13 @@ if [[ "${1:-}" == "--capture" ]]; then
     fi
   else
     inf "install libcamera-tools for the capture test"
+  fi
+  if [[ -e /dev/video42 ]] && command -v gst-launch-1.0 >/dev/null; then
+    if timeout 20 gst-launch-1.0 -q v4l2src device=/dev/video42 num-buffers=60 ! fakesink >/dev/null 2>&1; then
+      ok "read 60 frames from the Zoom Camera"
+    else
+      bad "could not read from the Zoom Camera"
+    fi
   fi
 fi
 

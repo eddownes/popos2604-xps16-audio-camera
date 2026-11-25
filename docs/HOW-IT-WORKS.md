@@ -155,6 +155,30 @@ the shape requested, not a bug. Video-call sites use 16:9 sizes.
   never produce a picture. The rule hides devices with
   `device.product.name = "ipu7"`.
 
+## 5. Zoom (V4L2-only apps)
+
+The Zoom Flatpak (7.x) captures from V4L2 devices only; it has no PipeWire
+camera support. The only working camera on this laptop is libcamera's
+software-ISP camera in PipeWire, so Zoom sees nothing usable.
+
+The `zoom` component adds a virtual V4L2 camera and feeds it from PipeWire:
+
+- `v4l2loopback` creates `/dev/video42`, labelled "Zoom Camera", with
+  `exclusive_caps=1` (it advertises capture only while a writer is active,
+  which some apps need).
+- `xps16-camera-relay` (user service) subscribes to v4l2loopback's
+  `CLIENT_USAGE` event. While no app streams, it writes one black frame per
+  second (declared as 30 fps, because v4l2loopback locks the format,
+  framerate included, while a reader streams, and the camera feed that takes
+  over has to match). When an app starts streaming it switches to
+  `pipewiresrc` (the "Built-in Front Camera" node) → 1280x720 YUY2 30 fps,
+  and goes back to black when the app stops. So the camera, and its light,
+  is on only during a call.
+- Measured: ~28.6 fps through the virtual camera; about 1% of a CPU core
+  while idle (30 fps black frames cost 15–20%).
+- The WirePlumber rule also hides "Zoom Camera" from PipeWire. Otherwise
+  PipeWire would list it as a camera that loops back into itself.
+
 ## What didn't work
 
 Recorded so nobody repeats it:
@@ -165,7 +189,8 @@ Recorded so nobody repeats it:
 | Blacklisting `ov08x40`/`intel_ipu7` and forcing a modprobe order (older Ubuntu/CachyOS approach) | Unnecessary on 7.2: registration completes. The blacklist would only break things |
 | Unbinding/rebinding `intel_cvs` at runtime | Fixes audio for that session, breaks the camera until reboot |
 | `LIBCAMERA_SOFTISP_MODE=cpu` for PipeWire | Still crashed (debayer LUT overflow) |
-| `v4l2loopback` + `v4l2-relayd` 1280x720 virtual camera from the full mode | Picture fine, but 1–8 fps inside the service; never found why. Not needed after the sensor-mode fix |
+| `v4l2loopback` + `v4l2-relayd` 1280x720 virtual camera from the full mode | Picture fine, but 1–8 fps inside the service; never found why. Replaced by the PipeWire-fed relay in section 5 |
+| Idle relay feed at a real 1 fps | v4l2loopback keeps 1/1 fps once a reader streams; the camera feed then can't negotiate 30 fps |
 
 ## References
 

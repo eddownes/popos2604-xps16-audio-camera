@@ -15,6 +15,7 @@ WirePlumber 0.5.13, Firefox 160 (November 2026).
 | Webcam image upside down | Sensor is mounted rotated 180° but firmware says 0°; this model is missing from the kernel's quirk table | `rotation`: patched `ipu-bridge` (DKMS) |
 | Webcam black/green, cut off, or PipeWire crashes (sound drops too) | Sensor's 1928x1088 binned mode is rejected by the IPU7 firmware; the bad frames crash libcamera | `sensor-mode`: patched `ov08x40` (DKMS) |
 | Firefox can't see the camera; ~40 "ipu7" cameras in app pickers | Firefox's PipeWire camera is off by default; raw IPU7 nodes are exposed | `desktop`: Firefox pref + WirePlumber rule |
+| Zoom (Flatpak) has no camera | Zoom only uses V4L2 devices; the camera only works through libcamera/PipeWire | `zoom`: on-demand "Zoom Camera" v4l2loopback relay |
 
 The details are in [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md).
 
@@ -61,7 +62,8 @@ The details are in [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md).
 
    All lines should say `PASS`.
 
-6. In apps, choose the camera named **"Built-in Front Camera"**.
+6. In apps, choose the camera named **"Built-in Front Camera"**. In the Zoom
+   desktop app, choose **"Zoom Camera"**.
 
 Keep the cloned folder: you need it for re-running after a kernel series
 change and for uninstalling.
@@ -85,6 +87,12 @@ change and for uninstalling.
 - **desktop** — adds `~/.config/wireplumber/wireplumber.conf.d/50-xps16-camera.conf`
   (hides raw `ipu7` nodes) and appends a marked block to each Firefox
   profile's `user.js` (PipeWire camera on, 1920x1080 default);
+- **zoom** — installs `v4l2loopback-dkms` and `gstreamer1.0-pipewire`, creates
+  `/dev/video42` "Zoom Camera" (`/etc/modprobe.d/xps16-zoom-camera.conf`,
+  `/etc/modules-load.d/xps16-zoom-camera.conf`), and enables the user service
+  `xps16-camera-relay.service` (`/usr/local/bin/xps16-camera-relay`). The
+  service opens the real camera only while an app streams from the virtual
+  one; otherwise it feeds a black frame once a second (about 1% of a CPU core);
 - runs `update-initramfs -u` (Pop!_OS's `kernelstub` copies it to the ESP).
 
 If upstream already contains a fix (the quirk entry exists, or the broken
@@ -96,7 +104,7 @@ is used.
 ```text
 ./install.sh                     everything
 ./install.sh --only audio        one component; repeat --only for more:
-                                 audio | rotation | sensor-mode | desktop
+                                 audio | rotation | sensor-mode | desktop | zoom
 ./install.sh --build-only        download, patch and compile into ./build only;
                                  changes nothing on the system
 ./install.sh --force             run on a model other than DA16260 (see below)
@@ -131,6 +139,7 @@ major kernel updates:
 | rotation | `"XPS 16 DA16260"` in `ipu-bridge.c`'s `upside_down_sensor_dmi_ids` | `./install.sh --build-only` prints "upstream already has this fix" | `./uninstall.sh --only rotation` |
 | sensor-mode | ov08x40 2-lane 1928x1088 mode removed (linux-media, Sept 2026) | same as above | `./uninstall.sh --only sensor-mode` |
 | desktop | not a bug; keep it | — | `./uninstall.sh --only desktop` |
+| zoom | Zoom supporting PipeWire cameras (or not using the Zoom app) | — | `./uninstall.sh --only zoom` |
 
 Always reboot after uninstalling and run `./tools/verify.sh`.
 
@@ -184,8 +193,10 @@ things worse. Details are in [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md#what-di
   the camera. The in-tree async registration works.
 - Don't set `LIBCAMERA_SOFTISP_MODE=cpu`. The CPU debayer overflows on this
   sensor; the default GPU path is the one that works.
-- Don't add a `v4l2loopback` / `v4l2-relayd` virtual camera. It isn't needed
-  once the sensor mode is fixed, and it ran at 1–8 fps here.
+- Don't use `v4l2-relayd` (libcamera source) for a virtual camera. It ran at
+  1–8 fps here. The `zoom` component's relay reads from PipeWire instead and
+  runs at ~29 fps. Apps that use PipeWire (Firefox, Chromium, GNOME/COSMIC
+  apps) don't need the virtual camera at all.
 
 ## License
 
