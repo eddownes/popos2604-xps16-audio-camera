@@ -1,0 +1,131 @@
+#!/usr/bin/python3 -I
+# popos2604-xps16-audio-camera: feed the libcamera camera (PipeWire) into a
+# v4l2loopback device ("Zoom Camera", /dev/video42) for apps that only use
+# V4L2, like the Zoom Flatpak.
+#
+# The real camera is opened only while some app is streaming from the
+# virtual device; otherwise a black frame is fed so the device stays
+# visible to apps (v4l2loopback exclusive_caps=1 hides it with no writer).
+# Usage changes come from v4l2loopback's CLIENT_USAGE event.
+import json
+import os
+import select
+import signal
+import struct
+import subprocess
+import sys
+import time
+import fcntl
+
+DEV = os.environ.get("RELAY_DEVICE", "/dev/video42")
+CAMERA = os.environ.get("RELAY_CAMERA", "Built-in Front Camera")
+W, H, FPS = 1280, 720, 30
+CAPS = f"video/x-raw,format=YUY2,width={W},height={H},framerate={FPS}/1"
+# The idle black feed only keeps the device visible to apps, so it sends
+# 1 frame/s (at 30 fps, copying full frames costs ~15-20% of a CPU core) but
+# declares 30 fps: v4l2loopback locks the format while a reader streams, and
+# the camera feed that takes over must match it.
+IDLE_CAPS = f"video/x-raw,format=YUY2,width={W},height={H},framerate=1/1"
+
+V4L2_EVENT_PRIVATE_START = 0x08000000
+EVENT_CLIENT_USAGE = V4L2_EVENT_PRIVATE_START + 0x08E00000 + 1
+V4L2_EVENT_SUB_FL_SEND_INITIAL = 1
+VIDIOC_SUBSCRIBE_EVENT = 0x4020565A  # _IOW('V', 90, struct v4l2_event_subscription)
+VIDIOC_DQEVENT = 0x80885659          # _IOR('V', 89, struct v4l2_event), 136 bytes
+
+
+def log(*a):
+    print(*a, file=sys.stderr, flush=True)
+
+
+def camera_node():
+    try:
+        out = subprocess.run(["pw-dump"], capture_output=True, text=True, timeout=10).stdout
+        for o in json.loads(out):
+            props = (o.get("info") or {}).get("props") or {}
+            if o.get("type") == "PipeWire:Interface:Node" and props.get("node.description") == CAMERA:
+                return props.get("node.name")
+    except Exception as e:  # noqa: BLE001
+        log("pw-dump failed:", e)
+    return None
+
+
+def pipeline(mode):
+    sink = ["v4l2sink", f"device={DEV}", "sync=false"]
+    if mode == "black":
+        src = ["videotestsrc", "pattern=black", "is-live=true", "!", IDLE_CAPS, "!",
+               "capssetter", f"caps=video/x-raw,framerate={FPS}/1"]
+    else:
+        node = camera_node()
+        target = [f"target-object={node}"] if node else []
+        if not node:
+            log(f"camera '{CAMERA}' not found in PipeWire; using the default video source")
+        src = (["pipewiresrc", *target, "do-timestamp=true", "!", "videoconvert", "!",
+                "videoscale", "!", "videorate", "drop-only=true", "!", CAPS, "!",
+                "queue", "leaky=downstream", "max-size-buffers=2"])
+    return ["gst-launch-1.0", "-q", *src, "!", *sink]
+
+
+class Relay:
+    def __init__(self):
+        self.proc = None
+        self.mode = None
+
+    def run(self, mode):
+        if self.mode == mode and self.proc and self.proc.poll() is None:
+            return
+        self.stop()
+        log("feeding", mode)
+        self.proc = subprocess.Popen(pipeline(mode))
+        self.mode = mode
+
+    def stop(self):
+        if self.proc and self.proc.poll() is None:
+            self.proc.send_signal(signal.SIGINT)  # lets gst-launch send EOS and close cleanly
+            try:
+                self.proc.wait(5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait()
+        self.proc = None
+        self.mode = None
+
+
+def main():
+    relay = Relay()
+
+    def bye(*_):
+        relay.stop()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, bye)
+    signal.signal(signal.SIGINT, bye)
+
+    fd = os.open(DEV, os.O_RDWR | os.O_NONBLOCK)
+    sub = struct.pack("=III20x", EVENT_CLIENT_USAGE, 0, V4L2_EVENT_SUB_FL_SEND_INITIAL)
+    fcntl.ioctl(fd, VIDIOC_SUBSCRIBE_EVENT, sub)
+    poller = select.poll()
+    poller.register(fd, select.POLLPRI)
+
+    want = "black"
+    relay.run(want)
+    while True:
+        for _ in poller.poll(2000):
+            while True:
+                buf = bytearray(136)
+                try:
+                    fcntl.ioctl(fd, VIDIOC_DQEVENT, buf)
+                except OSError:
+                    break
+                etype, count = struct.unpack_from("=I4xI", buf)
+                if etype == EVENT_CLIENT_USAGE:
+                    want = "camera" if count > 0 else "black"
+        if relay.mode != want or relay.proc is None or relay.proc.poll() is not None:
+            if relay.proc is not None and relay.proc.poll() is not None and relay.mode == want:
+                log(f"{want} pipeline exited ({relay.proc.returncode}); restarting")
+                time.sleep(1)
+            relay.run(want)
+
+
+if __name__ == "__main__":
+    main()

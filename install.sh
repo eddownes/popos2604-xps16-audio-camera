@@ -6,7 +6,7 @@
 #
 #   ./install.sh                     install everything, then reboot
 #   ./install.sh --only audio        just one component (repeatable):
-#                                    audio | rotation | sensor-mode | desktop
+#                                    audio | rotation | sensor-mode | desktop | zoom
 #   ./install.sh --build-only        download + patch + compile the kernel
 #                                    modules in ./build, change nothing
 #   ./install.sh --force             allow a machine that isn't a DA16260
@@ -35,9 +35,9 @@ while [[ $# -gt 0 ]]; do
     *) die "unknown option: $1 (see --help)" ;;
   esac
 done
-[[ ${#COMPONENTS[@]} -eq 0 ]] && COMPONENTS=(audio rotation sensor-mode desktop)
+[[ ${#COMPONENTS[@]} -eq 0 ]] && COMPONENTS=(audio rotation sensor-mode desktop zoom)
 for c in "${COMPONENTS[@]}"; do
-  case "$c" in audio|rotation|sensor-mode|desktop) ;; *) die "unknown component: $c" ;; esac
+  case "$c" in audio|rotation|sensor-mode|desktop|zoom) ;; *) die "unknown component: $c" ;; esac
 done
 want() { local c; for c in "${COMPONENTS[@]}"; do [[ "$c" == "$1" ]] && return 0; done; return 1; }
 
@@ -151,6 +151,7 @@ remove_legacy() {  # names used while this setup was first worked out
 # ---------------------------------------------------------------- packages
 NEED_PKGS=(curl python3 make gcc dkms "linux-headers-$KREL")
 want desktop && NEED_PKGS+=(libcamera-tools)
+want zoom && NEED_PKGS+=(v4l2loopback-dkms gstreamer1.0-pipewire gstreamer1.0-plugins-good gstreamer1.0-tools v4l-utils)
 MISSING=()
 for p in "${NEED_PKGS[@]}"; do dpkg -s "$p" >/dev/null 2>&1 || MISSING+=("$p"); done
 if [[ ${#MISSING[@]} -gt 0 ]]; then
@@ -222,6 +223,27 @@ if want desktop; then
   done
   [[ $found -eq 1 ]] || warn "no Firefox profile yet. Start Firefox once, close it, then run: ./install.sh --only desktop"
   pgrep -x firefox >/dev/null && warn "Firefox is running; restart it for the camera setting to apply"
+fi
+
+# ---------------------------------------------------------------- zoom
+if want zoom; then
+  log "[zoom] installing the \"Zoom Camera\" virtual camera for V4L2-only apps"
+  sudo install -m 0644 "$REPO_DIR/files/zoom/xps16-zoom-camera-modprobe.conf" /etc/modprobe.d/xps16-zoom-camera.conf
+  sudo install -m 0644 "$REPO_DIR/files/zoom/xps16-zoom-camera-modules-load.conf" /etc/modules-load.d/xps16-zoom-camera.conf
+  sudo install -m 0755 "$REPO_DIR/files/zoom/xps16-camera-relay" /usr/local/bin/xps16-camera-relay
+  install -D -m 0644 "$REPO_DIR/files/zoom/xps16-camera-relay.service" \
+    "$HOME/.config/systemd/user/xps16-camera-relay.service"
+  # The WirePlumber rule that hides this device from PipeWire is in the desktop component.
+  want desktop || install -D -m 0644 "$REPO_DIR/files/desktop/50-xps16-camera.conf" \
+    "$HOME/.config/wireplumber/wireplumber.conf.d/50-xps16-camera.conf"
+  if [[ ! -e /dev/video42 ]]; then
+    sudo modprobe -r v4l2loopback 2>/dev/null || true
+    sudo modprobe v4l2loopback || warn "could not load v4l2loopback now; it loads at the next boot"
+  fi
+  systemctl --user daemon-reload
+  systemctl --user enable xps16-camera-relay.service
+  [[ -e /dev/video42 ]] && systemctl --user restart xps16-camera-relay.service || true
+  CHANGED_INITRAMFS=1
 fi
 
 # ---------------------------------------------------------------- finish

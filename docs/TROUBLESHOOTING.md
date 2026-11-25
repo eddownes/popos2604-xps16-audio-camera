@@ -88,17 +88,32 @@ journalctl --user -b | grep -iE 'libcamera|No valid pipeline'
   If not, run `./install.sh --only desktop` and restart Firefox.
 - Pick **"Built-in Front Camera"**.
 
+## Zoom app has no camera
+
+- In Zoom → Settings → Video, pick **"Zoom Camera"**.
+- Check the relay: `systemctl --user status xps16-camera-relay` and
+  `journalctl --user -u xps16-camera-relay -b`.
+- No `/dev/video42`: `lsmod | grep v4l2loopback`; if `dkms status` shows
+  v4l2loopback isn't built for your kernel, reinstall `v4l2loopback-dkms`.
+- Black picture in Zoom: the relay is still on the idle feed. Look for
+  "feeding camera" in the journal when Zoom starts video; if it's missing,
+  restart the service.
+- Close other apps using the camera first; libcamera allows one user.
+
 ## Picture is cut off on one website
 
 The site asked for a non-16:9 size (for example 3840x1080). That's expected;
 see [HOW-IT-WORKS.md](HOW-IT-WORKS.md#3-crashes-blackgreen-video-cut-off-picture).
 Video-call sites (Meet, Zoom, Teams) use 16:9 and show the full view.
 
-## Image looks soft or washed out near windows
+## Image looks soft or washed out near windows, or grainy when moving
 
 That's the libcamera software ISP with no tuning file for this sensor
-(`ov08x40.yaml` not found, using `uncalibrated.yaml`). It's not something
-this repo fixes.
+(`ov08x40.yaml` not found, using `uncalibrated.yaml`) and no noise
+reduction. In a dim or backlit room the auto-exposure runs at maximum gain,
+so the picture gets grainy, most visibly when you move. More light on your
+face (not a window behind you) helps most. It's not something this repo
+fixes.
 
 ## After a kernel update
 

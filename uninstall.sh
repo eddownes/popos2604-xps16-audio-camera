@@ -3,7 +3,7 @@
 #
 #   ./uninstall.sh                  remove everything
 #   ./uninstall.sh --only rotation  remove one component (repeatable):
-#                                   audio | rotation | sensor-mode | desktop
+#                                   audio | rotation | sensor-mode | desktop | zoom
 #
 # Use --only once your kernel ships the upstream fix for that component
 # (see README.md, "When can I remove this?").
@@ -19,7 +19,7 @@ while [[ $# -gt 0 ]]; do
     *) echo "unknown option: $1" >&2; exit 1 ;;
   esac
 done
-[[ ${#COMPONENTS[@]} -eq 0 ]] && COMPONENTS=(audio rotation sensor-mode desktop)
+[[ ${#COMPONENTS[@]} -eq 0 ]] && COMPONENTS=(audio rotation sensor-mode desktop zoom)
 want() { local c; for c in "${COMPONENTS[@]}"; do [[ "$c" == "$1" ]] && return 0; done; return 1; }
 [[ $EUID -eq 0 ]] && { echo "run as your normal user" >&2; exit 1; }
 
@@ -57,6 +57,18 @@ if want desktop; then
   systemctl --user restart wireplumber 2>/dev/null || true
   # user.js only sets prefs at startup; prefs.js keeps the last values.
   log "Firefox: reset media.webrtc.camera.allow-pipewire in about:config if you want it off again"
+fi
+
+if want zoom; then
+  log "removing the Zoom Camera relay (v4l2loopback-dkms stays installed)"
+  systemctl --user disable --now xps16-camera-relay.service 2>/dev/null || true
+  rm -f "$HOME/.config/systemd/user/xps16-camera-relay.service"
+  systemctl --user daemon-reload
+  sudo rm -f /usr/local/bin/xps16-camera-relay \
+             /etc/modprobe.d/xps16-zoom-camera.conf \
+             /etc/modules-load.d/xps16-zoom-camera.conf
+  sudo modprobe -r v4l2loopback 2>/dev/null || true
+  INITRAMFS=1
 fi
 
 [[ $INITRAMFS -eq 1 ]] && sudo update-initramfs -u

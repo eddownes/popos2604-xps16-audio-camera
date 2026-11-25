@@ -1,0 +1,16 @@
+# popos2604-xps16-audio-camera
+# Feeds the libcamera camera into the "Zoom Camera" v4l2loopback device for
+# V4L2-only apps (Zoom). The real camera is opened only while an app streams.
+[Unit]
+Description=XPS 16: relay the PipeWire camera to /dev/video42 for V4L2-only apps
+After=pipewire.service wireplumber.service
+Wants=pipewire.service wireplumber.service
+ConditionPathExists=/dev/video42
+
+[Service]
+ExecStart=/usr/local/bin/xps16-camera-relay
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
